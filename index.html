@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet" />
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <style>
 /* ============================================================
    JDRS Brand Layer (inlined from brand/brand.css)
@@ -245,8 +246,13 @@ var TOOL_VERSION = '2.0';
    download-only. FORM_KEY must match JDRS_INTAKE_FORM_KEY on the endpoint. The submission
    POSTs the {meta,answers,summary} JSON; JARVIS generates the Engagement Pack and files it.
    See docs/jarvis-intake-setup.md. (For a Power Automate target instead, see docs/submission-setup.md.) */
-var SUBMIT_URL = '';
+var SUBMIT_URL = 'https://macbook-pro-1.taile0716a.ts.net:8443/api/atlas/intake/submit';
 var FORM_KEY = '';
+/* Cloudflare Turnstile sitekey (PUBLIC — safe in this file). When set, a verification
+   widget appears before Submit and its token is sent + verified server-side (the real
+   bot guard). Empty = no widget. Cloudflare test sitekey (always passes): 1x00000000000000000000AA */
+var TURNSTILE_SITEKEY = '0x4AAAAAADtfbYVZq2ql7zbB';
+var turnstileWidgetId = null;
 
 /* ---------- Screen + question definitions ----------
    Question shape: { id, type, required?, label, guide,
@@ -1063,6 +1069,7 @@ function renderSummary(){
   var dlNote = SUBMIT_URL
     ? '<strong>Submit to JDRS</strong> sends your responses straight to JDRS, who will prepare your engagement pack — that’s all you need to do. You can also keep a copy for your records.'
     : 'The <strong>HTML summary</strong> is your record. The <strong>JSON</strong> is the input for the JDRS Engagement Pack generator.';
+  if(SUBMIT_URL && TURNSTILE_SITEKEY){ node.appendChild(el('<div class="cf-wrap" style="padding:16px 34px 0;"><div id="cf-box"></div></div>')); }
   node.appendChild(el(
     '<div class="download-bar">'+
       submitBtn+
@@ -1078,16 +1085,34 @@ function renderSummary(){
   document.getElementById('dlReport').addEventListener('click', function(){ downloadReport(s); });
   document.getElementById('dlJson').addEventListener('click', function(){ downloadJson(s); });
   var sb=document.getElementById('submitBtn'); if(sb) sb.addEventListener('click', function(){ submitToJDRS(s, sb); });
+  turnstileWidgetId=null; renderTurnstile();
+}
+
+function renderTurnstile(){
+  if(!(SUBMIT_URL && TURNSTILE_SITEKEY)) return;
+  var box=document.getElementById('cf-box'); if(!box) return;
+  if(turnstileWidgetId!==null) return;
+  if(window.turnstile && turnstile.render){
+    try{ turnstileWidgetId = turnstile.render('#cf-box', { sitekey: TURNSTILE_SITEKEY, theme:'light' }); }catch(e){}
+  } else {
+    setTimeout(renderTurnstile, 300); // api.js loads async — retry until ready
+  }
 }
 
 function submitToJDRS(s, btn){
   if(!SUBMIT_URL){ toast('Submission isn’t configured yet — please download a copy and email it to JDRS.'); return; }
+  var token='';
+  if(TURNSTILE_SITEKEY){
+    token = (window.turnstile && turnstileWidgetId!==null) ? turnstile.getResponse(turnstileWidgetId) : '';
+    if(!token){ toast('Please complete the verification check first.'); return; }
+  }
   btn.disabled=true; var old=btn.innerHTML; btn.textContent='Submitting…';
   var payload={ meta:{ tool:'JDRS Engagement Questionnaire', stage:'All (six-stage prep)', version:TOOL_VERSION, generated:new Date().toISOString() }, answers:state.answers, summary:s };
+  if(token) payload.turnstileToken=token;
   fetch(SUBMIT_URL, {method:'POST', headers:{'Content-Type':'application/json','x-jdrs-form-key':FORM_KEY}, body:JSON.stringify(payload)})
     .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json().catch(function(){return {};}); })
     .then(function(){ try{ localStorage.setItem(STORAGE_KEY+'_submitted','1'); }catch(e){} showSubmitted(s); })
-    .catch(function(){ btn.disabled=false; btn.innerHTML=old; toast('Couldn’t reach JDRS — please download a copy and email it instead.'); });
+    .catch(function(){ btn.disabled=false; btn.innerHTML=old; if(window.turnstile && turnstileWidgetId!==null){ try{ turnstile.reset(turnstileWidgetId); }catch(e){} } toast('Couldn’t reach JDRS — please download a copy and email it instead.'); });
 }
 
 function showSubmitted(s){
